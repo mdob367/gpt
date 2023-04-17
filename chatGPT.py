@@ -13,6 +13,7 @@ lr = 1e-3 # Learning rate
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Using device:', device)
 eval_iters = 100
+n_embed = 32 # Embedding size
 
 torch.manual_seed(1337)
 
@@ -22,12 +23,20 @@ class BigramLanguageModel(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
         # each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
+        # each token also reads off the logits for the next token from a position embedding table
+        self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        # the final logits are a linear combination of the two
+        self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
 
         # idx and targets are both (B, T) tensor of integers
-        logits = self.token_embedding_table(idx) # (B, T, C) Batch, Time, Channel
+        B, T = idx.shape # (B, T) Batch, Time
+        tok_emb = self.token_embedding_table(idx) # (B, T, C) Batch, Time, Channel
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C) Time, Channel
+        x = tok_emb + pos_emb # (B, T, C) Batch, Time, Channel
+        logits = self.lm_head(x) # (B, T, vocab_size) Batch, Time, vocab_size
         
         if targets is None:
             loss = None
@@ -65,7 +74,7 @@ def load_shakespeare():
 
 
 def create_encoder_decoder(text):
-    chars = ''.join(sorted(list(set(txt))))
+    chars = ''.join(sorted(list(set(text))))
     vocab_size = len(chars)
     stoi = {c: i for i, c in enumerate(chars)}
     itos = {i: c for i, c in enumerate(chars)}
@@ -89,7 +98,7 @@ def get_batch(data, block_size, batch_size):
     return x, y
 
 @torch.no_grad()
-def estimate_losses():
+def estimate_losses(trn_data, val_data, m):
     losses = {}
     m.eval() # Set model to evaluation mode
     for split in ['train', 'val']:
@@ -135,25 +144,11 @@ def run_model():
         optimizer.step()
         loss_history.append(loss.item())
         if epoch % eval_interval == 0:
-            losses = estimate_losses()
+            losses = estimate_losses(trn_data=trn_data, val_data=val_data, m=m)
             print(f"Epoch {epoch}: Train Loss: {losses['train']:.4f}, Val Loss: {losses['val']:.4f}")
     plt.plot(loss_history)
     plt.show()
     print(decode(m.generate(idx=torch.zeros((1,1), dtype=torch.long), max_new_tokens=1000)[0].tolist()))
 
 if __name__ == '__main__':
-    # Toy example of self attention
-    B,T,C=4,8,2 # (B, T, C) Batch, Time, Channel
-    x = torch.randn(B,T,C)
-    print(x.shape)
-
-    # Want x[b,t] to be mean for i<=t of x[b,i]
-    x_bow = torch.zeros(B,T,C)
-    for b in range(B):
-        for t in range(T):
-            xprev = x[b, :t+1, :] # (t, C)
-            x_bow[b,t] = torch.mean(xprev, dim=0)
-    print(x[0])
-    print(x_bow[:,-1])
-    print(x_bow.shape)
-    # run_model()
+    run_model()
